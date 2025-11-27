@@ -2,83 +2,142 @@
 
 public class RobotController : MonoBehaviour
 {
-    [Header("Robot Joints")]
-    public Transform baseJoint;       // Bone
-    public Transform shoulderJoint;   // Bone.001
-    public Transform elbowJoint;      // Bone.003
-    public Transform forearmJoint;    // Bone.005
-    public Transform wristYaw;        // Bone.007
-    public Transform wristRoll;       // Bone.009
+    [Header("Joints to control")]
+    public Transform bone;      // left/right rotation (base joint)
+    public Transform bone006;   // up/down rotation (vertical joint)
 
     [Header("Settings")]
     public float speed = 60f;
 
+    [Header("Gripper System")]
+    public Transform gripperEnd;          // End point of the gripper
+    public GripperTrigger gripperTrigger; // Block detection script
+
+    private bool isAttached = false;      // True if a block is currently held
+    private Transform grabbedBlock = null;
+    private float grabbedBlockInitialY;   // Initial height of the block
+
+    public bool GetHoldingStatus()
+    {
+        return isAttached;
+    }
+
+
     void Update()
     {
-        float horizontal = Input.GetAxis("Horizontal");   // Arrow Left/Right
-        float vertical = Input.GetAxis("Vertical");       // Arrow Up/Down
+        float vertical = Input.GetAxis("Vertical");     // ↑ ↓ arrow keys
+        float horizontal = Input.GetAxis("Horizontal"); // ← → arrow keys
 
         // -----------------------
-        // BASE ROTATION
+        // UP/DOWN ROTATION : Bone.006
         // -----------------------
-        baseJoint.Rotate(0, horizontal * speed * Time.deltaTime, 0);
+        if (bone006 != null)
+        {
+            bone006.Rotate(-vertical * speed * Time.deltaTime, 0f, 0f, Space.Self);
+        }
 
         // -----------------------
-        // SHOULDER (Y)
+        // LEFT/RIGHT ROTATION : Bone
         // -----------------------
-        if (Input.GetKey(KeyCode.Y))
-            shoulderJoint.Rotate(vertical * speed * Time.deltaTime, 0, 0);
+        if (bone != null)
+        {
+            bone.Rotate(0f, horizontal * speed * Time.deltaTime, 0f, Space.Self);
+        }
 
-        // -----------------------
-        // ELBOW (X)
-        // -----------------------
-        if (Input.GetKey(KeyCode.X))
-            elbowJoint.Rotate(vertical * speed * Time.deltaTime, 0, 0);
-
-        // -----------------------
-        // FOREARM (C)
-        // -----------------------
-        if (Input.GetKey(KeyCode.C))
-            forearmJoint.Rotate(vertical * speed * Time.deltaTime, 0, 0);
-
-        // -----------------------
-        // WRIST YAW (V)
-        // -----------------------
-        if (Input.GetKey(KeyCode.V))
-            wristYaw.Rotate(0, vertical * speed * Time.deltaTime, 0);
-
-        // -----------------------
-        // WRIST ROLL (B)
-        // -----------------------
-        if (Input.GetKey(KeyCode.B))
-            wristRoll.Rotate(0, 0, vertical * speed * Time.deltaTime);
+        // ----- Grip / Release using G -----
+        if (Input.GetKeyDown(KeyCode.G))
+        {
+            ToggleGrip();
+        }
     }
+
+    ////////////////////////////////////////////////////////
+    private void ToggleGrip()
+    {
+        // 1) If nothing is attached → attempt to grab
+        if (!isAttached)
+        {
+            if (gripperTrigger == null || !gripperTrigger.isTouchingBlock)
+                return;
+
+            Transform block = gripperTrigger.currentBlock;
+            if (block == null) 
+                return;
+
+            grabbedBlock = block;
+
+            // Store the block's initial height
+            grabbedBlockInitialY = grabbedBlock.position.y;
+
+            // Disable physics while holding the block
+            Rigidbody rb = grabbedBlock.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.isKinematic = true;
+                rb.useGravity = false;
+            }
+
+            // Attach block to the gripper
+            grabbedBlock.SetParent(gripperEnd);
+            grabbedBlock.localPosition = Vector3.zero;
+
+            isAttached = true;
+        }
+        // 2) If a block is already attached → release it
+        else
+        {
+            if (grabbedBlock == null)
+            {
+                isAttached = false;
+                return;
+            }
+
+            // Detach the block from the gripper
+            grabbedBlock.SetParent(null);
+
+            // Restore the block’s original height (Y axis)
+            Vector3 pos = grabbedBlock.position;
+            pos.y = grabbedBlockInitialY;
+            grabbedBlock.position = pos;
+
+            // Re-enable physics
+            Rigidbody rb = grabbedBlock.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.isKinematic = false;
+                rb.useGravity = true;
+            }
+
+            grabbedBlock = null;
+            isAttached = false;
+        }
+    }
+
+
+
+    
+
 }
-
-
 
 
 /*
     ============================
-    ROBOT ARM KEYBOARD CONTROLS
+    SIMPLE ROBOT ARM INTERACTION
     ============================
 
-    Simple manual control of the 6-DOF robotic arm.
+    Manual control of a robot arm to move and manipulate blocks.
 
-    --- BASE ROTATION ---
+    --- ARM MOVEMENT ---
     (← →) Left / Right Arrows  -> Rotate the base joint
+    (↑ ↓) Up / Down Arrows     -> Move the vertical joint
 
-    --- JOINT MOVEMENT ---
-    NOTE: Use Up / Down arrows together with the keys below
+    --- GRIPPER ACTION ---
+    (G) Press G to grab or release a block
+    - When released, the block is automatically restored to its original height
+      regardless of the drop location.
 
-    Q + ↑/↓   -> Move the Shoulder Joint
-    W + ↑/↓   -> Move the Elbow Joint
-    E + ↑/↓   -> Move the Forearm Joint
-
-    --- WRIST CONTROL ---
-    A + ↑/↓   -> Wrist Yaw rotation
-    S + ↑/↓  -> Wrist Roll rotation
-
-    These controls allow manual testing of the robot arm before 
-    implementing IK, ML-Agents, or automated trajectories.
+    Notes:
+    - Designed for simple testing and user-controlled interaction.
+    - Ensures consistent block placement for calibration and training purposes.
 */
+
