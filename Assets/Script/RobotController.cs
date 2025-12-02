@@ -7,69 +7,74 @@ public class RobotController : MonoBehaviour
     public Transform bone006;   // up/down rotation (vertical joint)
 
     [Header("Settings")]
-    public float speed = 60f;
+    public float speed = 30f;
 
     [Header("Gripper System")]
-    public Transform gripperEnd;          // End point of the gripper
-    public GripperTrigger gripperTrigger; // Block detection script
+    public Transform gripperEnd;
+    public GripperTrigger gripperTrigger;
 
-    private bool isAttached = false;      // True if a block is currently held
+    private bool isAttached = false;
     private Transform grabbedBlock = null;
-    private float grabbedBlockInitialY;   // Initial height of the block
+    private float grabbedBlockInitialY;
+
+    // ------------------------------
+    // Needed for ResetRobot()
+    // ------------------------------
+    private Quaternion initialBoneRot;
+    private Quaternion initialBone006Rot;
+    private Vector3 initialPosition;
+    private Quaternion initialRotation;
+
+    void Start()
+    {
+        initialBoneRot = bone.localRotation;
+        initialBone006Rot = bone006.localRotation;
+
+        initialPosition = transform.localPosition;
+        initialRotation = transform.localRotation;
+    }
 
     public bool GetHoldingStatus()
     {
         return isAttached;
     }
 
-
     void Update()
     {
-        float vertical = Input.GetAxis("Vertical");     // ↑ ↓ arrow keys
-        float horizontal = Input.GetAxis("Horizontal"); // ← → arrow keys
+        float vertical = Input.GetAxis("Vertical");
+        float horizontal = Input.GetAxis("Horizontal");
 
-        // -----------------------
-        // UP/DOWN ROTATION : Bone.006
-        // -----------------------
+        // Bone006 movement
         if (bone006 != null)
-        {
             bone006.Rotate(-vertical * speed * Time.deltaTime, 0f, 0f, Space.Self);
-        }
 
-        // -----------------------
-        // LEFT/RIGHT ROTATION : Bone
-        // -----------------------
+        // Base movement
         if (bone != null)
-        {
             bone.Rotate(0f, horizontal * speed * Time.deltaTime, 0f, Space.Self);
-        }
 
-        // ----- Grip / Release using G -----
+        // Manual grip toggle
         if (Input.GetKeyDown(KeyCode.G))
-        {
             ToggleGrip();
-        }
     }
 
-    ////////////////////////////////////////////////////////
-    private void ToggleGrip()
+    // ----------------------------------------------------
+    // 1. PUBLIC ToggleGrip (your same code, unchanged)
+    // ----------------------------------------------------
+    public void ToggleGrip()
     {
-        // 1) If nothing is attached → attempt to grab
         if (!isAttached)
         {
             if (gripperTrigger == null || !gripperTrigger.isTouchingBlock)
                 return;
 
             Transform block = gripperTrigger.currentBlock;
-            if (block == null) 
+            if (block == null)
                 return;
 
             grabbedBlock = block;
 
-            // Store the block's initial height
             grabbedBlockInitialY = grabbedBlock.position.y;
 
-            // Disable physics while holding the block
             Rigidbody rb = grabbedBlock.GetComponent<Rigidbody>();
             if (rb != null)
             {
@@ -77,13 +82,11 @@ public class RobotController : MonoBehaviour
                 rb.useGravity = false;
             }
 
-            // Attach block to the gripper
             grabbedBlock.SetParent(gripperEnd);
             grabbedBlock.localPosition = Vector3.zero;
 
             isAttached = true;
         }
-        // 2) If a block is already attached → release it
         else
         {
             if (grabbedBlock == null)
@@ -92,15 +95,12 @@ public class RobotController : MonoBehaviour
                 return;
             }
 
-            // Detach the block from the gripper
             grabbedBlock.SetParent(null);
 
-            // Restore the block’s original height (Y axis)
             Vector3 pos = grabbedBlock.position;
             pos.y = grabbedBlockInitialY;
             grabbedBlock.position = pos;
 
-            // Re-enable physics
             Rigidbody rb = grabbedBlock.GetComponent<Rigidbody>();
             if (rb != null)
             {
@@ -113,31 +113,59 @@ public class RobotController : MonoBehaviour
         }
     }
 
+    // ----------------------------------------------------
+    // 2. ADDED: ResetRobot()   (NO CHANGE → only added)
+    // ----------------------------------------------------
+    public void ResetRobot()
+    {
+        // Reset arm transform
+        transform.localPosition = initialPosition;
+        transform.localRotation = initialRotation;
 
+        // Reset joints
+        bone.localRotation = initialBoneRot;
+        bone006.localRotation = initialBone006Rot;
 
-    
+        // Release block if holding
+        if (isAttached && grabbedBlock != null)
+        {
+            grabbedBlock.SetParent(null);
 
+            Rigidbody rb = grabbedBlock.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.isKinematic = false;
+                rb.useGravity = true;
+            }
+        }
+
+        grabbedBlock = null;
+        isAttached = false;
+    }
+
+    // ----------------------------------------------------
+    // 3. ADDED: ApplyDiscreteActions() 
+    // ----------------------------------------------------
+    public void ApplyDiscreteActions(int baseAction, int verticalAction)
+    {
+        float baseMove = ActionToMovement(baseAction);
+        float vertMove = ActionToMovement(verticalAction);
+
+        // Base rotation
+        bone.Rotate(0f, baseMove * speed * Time.deltaTime, 0f, Space.Self);
+
+        // Arm vertical rotation
+        bone006.Rotate(-vertMove * speed * Time.deltaTime, 0f, 0f, Space.Self);
+    }
+
+    private float ActionToMovement(int action)
+    {
+        switch (action)
+        {
+            case 0: return -1f;  
+            case 1: return 0f;   
+            case 2: return +1f;  
+        }
+        return 0f;
+    }
 }
-
-
-/*
-    ============================
-    SIMPLE ROBOT ARM INTERACTION
-    ============================
-
-    Manual control of a robot arm to move and manipulate blocks.
-
-    --- ARM MOVEMENT ---
-    (← →) Left / Right Arrows  -> Rotate the base joint
-    (↑ ↓) Up / Down Arrows     -> Move the vertical joint
-
-    --- GRIPPER ACTION ---
-    (G) Press G to grab or release a block
-    - When released, the block is automatically restored to its original height
-      regardless of the drop location.
-
-    Notes:
-    - Designed for simple testing and user-controlled interaction.
-    - Ensures consistent block placement for calibration and training purposes.
-*/
-

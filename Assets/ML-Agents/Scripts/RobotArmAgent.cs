@@ -1,182 +1,108 @@
-﻿using UnityEngine;
-using Unity.MLAgents;
-using Unity.MLAgents.Sensors;
+﻿using Unity.MLAgents;
 using Unity.MLAgents.Actuators;
-
-// ================================================================
-// ROBOT ARM AGENT (PICK-AND-PLACE)
-// ---------------------------------------------------------------
-// The agent learns to pick a block from the white area and place
-// it on the green target area. It uses discrete actions to control
-// the arm joints and the gripper toggle.
-// ================================================================
+using Unity.MLAgents.Sensors;
+using UnityEngine;
 
 public class RobotArmAgent : Agent
 {
-    [Header("References")]
-    public RobotController robot;       // Manual robot movement logic
-    public Transform gripperEnd;        // End of the gripper
-    public Transform block;             // Block to pick
-    public Transform targetZone;        // Green target zone
-    public Transform startZone;         // White starting zone
+    [Header("Robot Joints (same as RobotController)")]
+    public Transform baseJoint;   // Bone
+    public Transform elbowJoint;  // Bone.006
 
-    [Header("Randomization")]
-    public float spawnRadius = 0.3f;
+    [Header("Objects")]
+    public Transform endEffector;   // tip of the robot arm
+    public Transform cube;          // object to pick
 
-    private Vector3 blockStartPos;
-    private Quaternion blockStartRot;
+    [Header("Zones")]
+    public Transform blueZone;      // spawn area
+    public Transform greenZone;     // target area
 
-    private Vector3 robotInitialPos;
-    private Quaternion robotInitialRot;
+    [Header("Settings")]
+    public float rotationSpeed = 60f;
 
-    private bool holdingBlock = false;
+    private bool isHoldingCube = false;
 
-    // -------------------------------------------------------------
-    // Initialize (called once)
-    // -------------------------------------------------------------
-    public override void Initialize()
-    {
-        robotInitialPos = robot.transform.localPosition;
-        robotInitialRot = robot.transform.localRotation;
-
-        blockStartPos = block.localPosition;
-        blockStartRot = block.localRotation;
-    }
-
-    // -------------------------------------------------------------
-    // Reset environment at each episode
-    // -------------------------------------------------------------
     public override void OnEpisodeBegin()
     {
-        // Reset robot
-        robot.transform.localPosition = robotInitialPos;
-        robot.transform.localRotation = robotInitialRot;
+        // Reset joint rotations
+        baseJoint.localRotation = Quaternion.identity;
+        elbowJoint.localRotation = Quaternion.identity;
 
-        // Reset block
-        block.localPosition = blockStartPos + new Vector3(
-            Random.Range(-spawnRadius, spawnRadius),
-            0,
-            Random.Range(-spawnRadius, spawnRadius)
-        );
-        block.localRotation = blockStartRot;
+        // Reset cube in blue zone
+        PlaceCubeInBlueZone();
 
-        // Reset gripper state
-        holdingBlock = false;
-
-        // Detach block if necessary
-        block.SetParent(null);
-        var rb = block.GetComponent<Rigidbody>();
-        rb.isKinematic = false;
-        rb.useGravity = true;
+        // Reset grip state
+        isHoldingCube = false;
+        cube.SetParent(null);
     }
 
-    // -------------------------------------------------------------
-    // Collect observations for the agent
-    // -------------------------------------------------------------
+    private void PlaceCubeInBlueZone()
+    {
+        Renderer r = blueZone.GetComponent<Renderer>();
+        Vector3 size = r.bounds.size;
+
+        float x = Random.Range(-size.x / 2f, size.x / 2f);
+        float z = Random.Range(-size.z / 2f, size.z / 2f);
+
+        cube.position = blueZone.position + new Vector3(x, 0.1f, z);
+    }
+
     public override void CollectObservations(VectorSensor sensor)
     {
-        // Robot / gripper observations
-        sensor.AddObservation(gripperEnd.localPosition);
+        // 2 joints rotation
+        sensor.AddObservation(baseJoint.localEulerAngles.y);
+        sensor.AddObservation(elbowJoint.localEulerAngles.x);
 
-        // Block position
-        sensor.AddObservation(block.localPosition);
+        // End effector position
+        sensor.AddObservation(endEffector.position);
 
-        // Target zone
-        sensor.AddObservation(targetZone.localPosition);
+        // Cube position
+        sensor.AddObservation(cube.position);
 
-        // Whether the agent is holding the block
-        sensor.AddObservation(holdingBlock ? 1f : 0f);
+        // Green zone position
+        sensor.AddObservation(greenZone.position);
 
-        // Distances (helpful for faster training)
-        sensor.AddObservation(Vector3.Distance(gripperEnd.position, block.position));
-        sensor.AddObservation(Vector3.Distance(block.position, targetZone.position));
+        // Holding object
+        sensor.AddObservation(isHoldingCube ? 1 : 0);
     }
 
-    // -------------------------------------------------------------
-    // Actions: what the agent can do
-    // -------------------------------------------------------------
-    // Actions:
-    // 0 - Move base joint (-1, 0, +1)
-    // 1 - Move vertical joint (-1, 0, +1)
-    // 2 - Toggle gripper (0 or 1)
-    // -------------------------------------------------------------
     public override void OnActionReceived(ActionBuffers actions)
     {
-        int baseAction = actions.DiscreteActions[0];
-        int verticalAction = actions.DiscreteActions[1];
-        int gripAction = actions.DiscreteActions[2];
+        float a0 = actions.ContinuousActions[0];  // base joint rotation
+        float a1 = actions.ContinuousActions[1];  // elbow joint rotation
 
-        // Apply rotation (-1, 0, +1)
-        float baseMove = ActionToMovement(baseAction);
-        float vertMove = ActionToMovement(verticalAction);
+        // Apply actions
+        baseJoint.Rotate(0, a0 * rotationSpeed * Time.deltaTime, 0);
+        elbowJoint.Rotate(a1 * rotationSpeed * Time.deltaTime, 0, 0);
 
-        robot.bone.Rotate(0f, baseMove * robot.speed * Time.deltaTime, 0f, Space.Self);
-        robot.bone006.Rotate(-vertMove * robot.speed * Time.deltaTime, 0f, 0f, Space.Self);
+        float reward = 0f;
 
-        // Gripper toggle
-        if (gripAction == 1)
+        // ---- PHASE 1: go to cube ----
+        if (!isHoldingCube)
         {
-            robot.SendMessage("ToggleGrip", SendMessageOptions.DontRequireReceiver);
+            float dCube = Vector3.Distance(endEffector.position, cube.position);
+            reward += -dCube * 0.1f;
+
+            if (dCube < 0.07f)
+            {
+                isHoldingCube = true;
+                cube.SetParent(endEffector);
+                AddReward(1.0f);
+            }
+        }
+        // ---- PHASE 2: move cube to green zone ----
+        else
+        {
+            float dGreen = Vector3.Distance(cube.position, greenZone.position);
+            reward += -dGreen * 0.1f;
+
+            if (dGreen < 0.1f)
+            {
+                AddReward(3.0f);
+                EndEpisode();
+            }
         }
 
-        holdingBlock = robot.GetHoldingStatus();
-
-        // ---------- REWARDS ----------
-        float distToBlock = Vector3.Distance(gripperEnd.position, block.position);
-        float distBlockToTarget = Vector3.Distance(block.position, targetZone.position);
-
-        // Reward for approaching the block
-        AddReward(-distToBlock * 0.001f);
-
-        // Reward for approaching the target while holding
-        if (holdingBlock)
-            AddReward(-distBlockToTarget * 0.002f);
-
-        // Reward for successfully picking
-        if (holdingBlock && distToBlock < 0.05f)
-            AddReward(+2.0f);
-
-        // Reward for placing block inside green zone
-        if (!holdingBlock && distBlockToTarget < 0.1f)
-        {
-            AddReward(+5.0f);
-            EndEpisode();
-        }
-
-        // Slight penalty for time spent
-        AddReward(-0.0005f);
-    }
-
-    // Convert discrete action to movement multiplier
-    float ActionToMovement(int action)
-    {
-        switch (action)
-        {
-            case 0: return -1f;  // move negative
-            case 1: return 0f;   // no move
-            case 2: return +1f;  // move positive
-        }
-        return 0f;
-    }
-
-    // -------------------------------------------------------------
-    // Manual control debugging (optional)
-    // -------------------------------------------------------------
-    public override void Heuristic(in ActionBuffers actionsOut)
-    {
-        var d = actionsOut.DiscreteActions;
-
-        // Base joint
-        if (Input.GetKey(KeyCode.LeftArrow)) d[0] = 0;
-        else if (Input.GetKey(KeyCode.RightArrow)) d[0] = 2;
-        else d[0] = 1;
-
-        // Vertical joint
-        if (Input.GetKey(KeyCode.UpArrow)) d[1] = 2;
-        else if (Input.GetKey(KeyCode.DownArrow)) d[1] = 0;
-        else d[1] = 1;
-
-        // Gripper
-        d[2] = Input.GetKey(KeyCode.G) ? 1 : 0;
+        AddReward(reward);
     }
 }
